@@ -21,3 +21,32 @@
     -webkit-backdrop-filter: blur(20px);
   }
 }
+
+/* LCD Scan-line effect */
+.lcd-scanlines {
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.15) 2px,
+    rgba(0, 0, 0, 0.15) 4px
+  );
+}
+
+/* LCD line animation */
+.lcd-line {
+  animation: lcdFlicker 4s infinite alternate;
+}
+
+@keyframes lcdFlicker {
+  0%, 95% { opacity: 1; }
+  96% { opacity: 0.92; }
+  97% { opacity: 1; }
+  98% { opacity: 0.95; }
+  100% { opacity: 1; }
+}
+
+/* Smooth slot status transition */
+.slot-transition {
+  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}

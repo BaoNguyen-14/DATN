@@ -1,4 +1,9 @@
+import ConnectionStatus from './ConnectionStatus';
+import { useParkingContext } from '../hooks/useParkingState';
+
 export default function TopNav({ title = "Đồ án tốt nghiệp - Bãi đậu xe thông minh", subtitle = "" }) {
+  const { connected } = useParkingContext();
+
   return (
     <header className="w-full top-0 sticky z-40 bg-white shadow-sm flex justify-between items-center px-6 py-4 border-b border-slate-100">
       <div className="flex flex-col">
@@ -11,11 +16,12 @@ export default function TopNav({ title = "Đồ án tốt nghiệp - Bãi đậu
           </span>
         )}
       </div>
-      <div className="flex items-center gap-6">
+      <div className="flex items-center gap-4">
+        <ConnectionStatus connected={connected} className="hidden md:flex" />
         <div className="relative hidden md:flex items-center bg-surface-container-highest px-4 py-2 rounded-full">
           <span className="material-symbols-outlined absolute left-3 text-slate-400 text-sm">search</span>
           <input
-            className="pl-8 pr-4 py-1 bg-transparent border-none rounded-full text-sm focus:ring-2 focus:ring-primary focus:bg-surface-container-lowest transition-all w-64 outline-none"
+            className="pl-8 pr-4 py-1 bg-transparent border-none rounded-full text-sm focus:ring-2 focus:ring-primary focus:bg-surface-container-lowest transition-all w-48 outline-none"
             placeholder="Tìm kiếm..."
             type="text"
           />

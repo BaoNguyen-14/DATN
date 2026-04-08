@@ -1,0 +1,15 @@
+# Backend Raspberry Pi - Dependencies
+# Install: pip install -r requirements.txt
+
+opencv-python-headless>=4.10.0.84
+websockets>=12.0
+# mfrc522==0.0.7        # Chỉ dùng trên Raspberry Pi
+# RPLCD==1.3.1          # Chỉ dùng trên Raspberry Pi
+flask>=3.0.0
+numpy>=1.24.0
+# smbus2==0.4.3         # Chỉ dùng trên Raspberry Pi
+scikit-learn>=1.3.0
+Pillow>=10.0.0
+
+# PiCamera2: sudo apt install python3-picamera2
+# RPi.GPIO: pre-installed on Raspberry Pi OS

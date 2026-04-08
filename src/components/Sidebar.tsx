@@ -1,83 +1,46 @@
 import { NavLink } from "react-router-dom";
 import { clsx } from "clsx";
 
+const navItems = [
+  { to: "/", icon: "dashboard", label: "HOME" },
+  { to: "/parking-map", icon: "local_parking", label: "PARKING" },
+  { to: "/history", icon: "history", label: "HISTORY" },
+  { to: "/settings", icon: "settings", label: "SETTINGS" },
+];
+
 export default function Sidebar() {
   return (
     <aside className="hidden lg:flex flex-col h-screen w-20 fixed left-0 top-0 bg-slate-50 border-r border-slate-200 z-50 py-8 overflow-hidden items-center justify-between">
       <div className="flex flex-col items-center gap-8 w-full">
-        <div className="text-lg font-black text-blue-900">SC</div>
+        <div className="text-lg font-black text-blue-900">SP</div>
         <nav className="flex flex-col w-full">
-          <NavLink
-            to="/"
-            className={({ isActive }) =>
-              clsx(
-                "flex flex-col items-center justify-center gap-1 py-6 transition-all duration-200 ease-in-out hover:scale-105",
-                isActive
-                  ? "bg-blue-50 text-blue-800 border-r-4 border-blue-800"
-                  : "text-slate-500 hover:bg-slate-100 hover:text-blue-700"
-              )
-            }
-          >
-            {({ isActive }) => (
-              <>
-                <span
-                  className="material-symbols-outlined"
-                  style={{ fontVariationSettings: isActive ? "'FILL' 1" : "'FILL' 0" }}
-                >
-                  dashboard
-                </span>
-                <span className="font-headline text-[10px] uppercase tracking-widest font-bold">HOME</span>
-              </>
-            )}
-          </NavLink>
-
-          <NavLink
-            to="/history"
-            className={({ isActive }) =>
-              clsx(
-                "flex flex-col items-center justify-center gap-1 py-6 transition-all duration-200 ease-in-out hover:scale-105",
-                isActive
-                  ? "bg-blue-50 text-blue-800 border-r-4 border-blue-800"
-                  : "text-slate-500 hover:bg-slate-100 hover:text-blue-700"
-              )
-            }
-          >
-            {({ isActive }) => (
-              <>
-                <span
-                  className="material-symbols-outlined"
-                  style={{ fontVariationSettings: isActive ? "'FILL' 1" : "'FILL' 0" }}
-                >
-                  history
-                </span>
-                <span className="font-headline text-[10px] uppercase tracking-widest font-bold">HISTORY</span>
-              </>
-            )}
-          </NavLink>
-
-          <NavLink
-            to="/settings"
-            className={({ isActive }) =>
-              clsx(
-                "flex flex-col items-center justify-center gap-1 py-6 transition-all duration-200 ease-in-out hover:scale-105",
-                isActive
-                  ? "bg-blue-50 text-blue-800 border-r-4 border-blue-800"
-                  : "text-slate-500 hover:bg-slate-100 hover:text-blue-700"
-              )
-            }
-          >
-            {({ isActive }) => (
-              <>
-                <span
-                  className="material-symbols-outlined"
-                  style={{ fontVariationSettings: isActive ? "'FILL' 1" : "'FILL' 0" }}
-                >
-                  settings
-                </span>
-                <span className="font-headline text-[10px] uppercase tracking-widest font-bold">SETTINGS</span>
-              </>
-            )}
-          </NavLink>
+          {navItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === "/"}
+              className={({ isActive }) =>
+                clsx(
+                  "flex flex-col items-center justify-center gap-1 py-5 transition-all duration-200 ease-in-out hover:scale-105",
+                  isActive
+                    ? "bg-blue-50 text-blue-800 border-r-4 border-blue-800"
+                    : "text-slate-500 hover:bg-slate-100 hover:text-blue-700"
+                )
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  <span
+                    className="material-symbols-outlined"
+                    style={{ fontVariationSettings: isActive ? "'FILL' 1" : "'FILL' 0" }}
+                  >
+                    {item.icon}
+                  </span>
+                  <span className="font-headline text-[9px] uppercase tracking-widest font-bold">{item.label}</span>
+                </>
+              )}
+            </NavLink>
+          ))}
         </nav>
       </div>
       <div className="flex flex-col items-center gap-4">
