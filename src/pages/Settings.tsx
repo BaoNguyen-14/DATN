@@ -22,11 +22,6 @@ export default function Settings() {
   const { wsUrl, setWsUrl, sendCommand } = useParkingContext();
   const [localWsUrl, setLocalWsUrl] = useState(wsUrl);
   const [costPerMinute, setCostPerMinute] = useState(() => loadSetting('parking_cost_per_minute', 1000));
-  const [cameraEntry, setCameraEntry] = useState(() => loadSetting('parking_camera_entry', 'http://raspberrypi.local:8080/entry'));
-  const [cameraExit, setCameraExit] = useState(() => loadSetting('parking_camera_exit', 'http://raspberrypi.local:8080/exit'));
-  const [cameraParking, setCameraParking] = useState(() => loadSetting('parking_camera_parking', 'http://raspberrypi.local:8080/parking'));
-  const [parkingName, setParkingName] = useState(() => loadSetting('parking_name', 'Smart Parking Central'));
-  const [parkingAddress, setParkingAddress] = useState(() => loadSetting('parking_address', 'Số 1 Đại Cồ Việt, Hai Bà Trưng, Hà Nội'));
   const [saved, setSaved] = useState(false);
 
   // Sync localWsUrl when wsUrl changes from outside
@@ -40,11 +35,6 @@ export default function Settings() {
 
     // Save all settings to localStorage
     saveSetting('parking_cost_per_minute', costPerMinute);
-    saveSetting('parking_camera_entry', cameraEntry);
-    saveSetting('parking_camera_exit', cameraExit);
-    saveSetting('parking_camera_parking', cameraParking);
-    saveSetting('parking_name', parkingName);
-    saveSetting('parking_address', parkingAddress);
 
     // Send cost update to backend
     sendCommand({
@@ -116,103 +106,12 @@ export default function Settings() {
                   onChange={(e) => setLocalWsUrl(e.target.value)}
                   placeholder="ws://raspberrypi.local:8765"
                 />
-                <p className="text-[10px] text-slate-400 mt-1">URL WebSocket server trên Raspberry Pi</p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-on-surface-variant uppercase tracking-widest mb-2">Camera MJPEG - Cổng Vào</label>
-                <input
-                  className="w-full bg-surface-container-low border-none rounded-lg py-3 px-4 focus:ring-2 focus:ring-primary focus:bg-surface-container-lowest transition-all font-mono text-sm"
-                  type="text"
-                  value={cameraEntry}
-                  onChange={(e) => setCameraEntry(e.target.value)}
-                  placeholder="http://raspberrypi.local:8080/entry"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-on-surface-variant uppercase tracking-widest mb-2">Camera MJPEG - Cổng Ra</label>
-                <input
-                  className="w-full bg-surface-container-low border-none rounded-lg py-3 px-4 focus:ring-2 focus:ring-primary focus:bg-surface-container-lowest transition-all font-mono text-sm"
-                  type="text"
-                  value={cameraExit}
-                  onChange={(e) => setCameraExit(e.target.value)}
-                  placeholder="http://raspberrypi.local:8080/exit"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-on-surface-variant uppercase tracking-widest mb-2">Webcam MJPEG - Quét bãi đậu</label>
-                <input
-                  className="w-full bg-surface-container-low border-none rounded-lg py-3 px-4 focus:ring-2 focus:ring-primary focus:bg-surface-container-lowest transition-all font-mono text-sm"
-                  type="text"
-                  value={cameraParking}
-                  onChange={(e) => setCameraParking(e.target.value)}
-                  placeholder="http://raspberrypi.local:8080/parking"
-                />
+                <p className="text-[10px] text-slate-400 mt-1">URL WebSocket server trên Raspberry Pi (Camera URLs sẽ tự động được nội suy từ URL này)</p>
               </div>
             </div>
           </div>
 
-          {/* General Information */}
-          <div className="bg-surface-container-lowest p-8 rounded-xl shadow-sm">
-            <h3 className="text-lg font-bold text-primary mb-6 flex items-center gap-2">
-              <span className="material-symbols-outlined text-secondary">info</span>
-              Thông tin bãi xe
-            </h3>
 
-            <div className="grid grid-cols-1 gap-6">
-              <div>
-                <label className="block text-xs font-bold text-on-surface-variant uppercase tracking-widest mb-2">Tên bãi xe</label>
-                <input
-                  className="w-full bg-surface-container-low border-none rounded-lg py-3 px-4 focus:ring-2 focus:ring-primary focus:bg-surface-container-lowest transition-all"
-                  type="text"
-                  value={parkingName}
-                  onChange={(e) => setParkingName(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-on-surface-variant uppercase tracking-widest mb-2">Địa chỉ bãi xe</label>
-                <textarea
-                  className="w-full bg-surface-container-low border-none rounded-lg py-3 px-4 focus:ring-2 focus:ring-primary focus:bg-surface-container-lowest transition-all"
-                  rows={2}
-                  value={parkingAddress}
-                  onChange={(e) => setParkingAddress(e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Hardware Pinout Reference */}
-          <div className="bg-surface-container-lowest p-8 rounded-xl shadow-sm">
-            <h3 className="text-lg font-bold text-primary mb-6 flex items-center gap-2">
-              <span className="material-symbols-outlined text-secondary">memory</span>
-              Sơ đồ phần cứng (tham khảo)
-            </h3>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-slate-50">
-                    <th className="px-4 py-2 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Thiết bị</th>
-                    <th className="px-4 py-2 text-left text-[10px] font-bold text-slate-400 uppercase tracking-widest">Kết nối</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  <tr><td className="px-4 py-2.5 font-medium">Webcam</td><td className="px-4 py-2.5 font-mono text-xs text-primary">USB</td></tr>
-                  <tr><td className="px-4 py-2.5 font-medium">Buzzer</td><td className="px-4 py-2.5 font-mono text-xs text-primary">GPIO 26</td></tr>
-                  <tr><td className="px-4 py-2.5 font-medium">Servo cổng VÀO</td><td className="px-4 py-2.5 font-mono text-xs text-primary">GPIO 12 (PWM0)</td></tr>
-                  <tr><td className="px-4 py-2.5 font-medium">Servo cổng RA</td><td className="px-4 py-2.5 font-mono text-xs text-primary">GPIO 13 (PWM1)</td></tr>
-                  <tr><td className="px-4 py-2.5 font-medium">IR cổng VÀO</td><td className="px-4 py-2.5 font-mono text-xs text-primary">GPIO 23</td></tr>
-                  <tr><td className="px-4 py-2.5 font-medium">IR cổng RA</td><td className="px-4 py-2.5 font-mono text-xs text-primary">GPIO 24</td></tr>
-                  <tr><td className="px-4 py-2.5 font-medium">RC522 cổng VÀO</td><td className="px-4 py-2.5 font-mono text-xs text-primary">SPI0-CE0 (GPIO8), RST=GPIO17</td></tr>
-                  <tr><td className="px-4 py-2.5 font-medium">RC522 cổng RA</td><td className="px-4 py-2.5 font-mono text-xs text-primary">SPI0-CE1 (GPIO7), RST=GPIO27</td></tr>
-                  <tr><td className="px-4 py-2.5 font-medium">LCD cổng VÀO</td><td className="px-4 py-2.5 font-mono text-xs text-primary">I2C1 addr=0x27</td></tr>
-                  <tr><td className="px-4 py-2.5 font-medium">LCD cổng RA</td><td className="px-4 py-2.5 font-mono text-xs text-primary">I2C1 addr=0x20</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
         </div>
       </div>
 

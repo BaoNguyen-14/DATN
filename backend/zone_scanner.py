@@ -38,14 +38,15 @@ CAM_WIDTH        = 640
 CAM_HEIGHT       = 480
 CAM_FPS          = 15
 
-# Ngưỡng phát hiện (OR logic — dễ nhận hơn AND)
-MOG2_PCT_THRESH  = 0.15   # 15% pixel tiền cảnh
-EDGE_THRESH      = 0.03   # 3%  pixel cạnh
+# Ngưỡng phát hiện (OR logic)
+MOG2_PCT_THRESH  = 0.22   # 22% pixel tiền cảnh (tăng để giảm noise)
+EDGE_THRESH      = 0.06   # 6%  pixel cạnh     (tăng để giảm noise)
 
 # MOG2 toàn frame
-MOG2_HISTORY     = 300
-MOG2_VAR_THRESH  = 25
+MOG2_HISTORY     = 500    # lịch sử dài hơn → model ổn định hơn
+MOG2_VAR_THRESH  = 40     # ngưỡng phương sai cao hơn → ít nhạy với rung nhẹ
 MOG2_DETECT_SHAD = False
+MOG2_LEARN_RATE  = 0.0001 # rất chậm sau warm-up → xe đứng yên không bị hấp thụ vào background
 
 # Tiền xử lý
 BLUR_KSIZE       = 5
@@ -53,7 +54,10 @@ CLAHE_CLIP       = 2.0
 MORPH_KSIZE      = 3
 
 # Warm-up trước khi phán quyết
-WARMUP_FRAMES    = 45     # ~3s @ 15 fps
+WARMUP_FRAMES    = 60     # ~4s @ 15 fps — xây model background ổn định hơn
+
+# Debounce: số frame liên tiếp cùng trạng thái cần đạt trước khi xác nhận
+CONFIRM_FRAMES   = 12     # 12 frame @ 15fps ≈ 0.8s — chống chớp nháy
 
 
 # ── Default ROIs (x, y, w, h) — cập nhật từ slot_rois.json ──
@@ -133,13 +137,16 @@ class ZoneScanner:
         self._webcam_index  = webcam_index
         self.on_status_change = on_status_change
 
-        # MOG2 dùng chung 1 instance toàn frame (khác cũ: 1 mog2/slot)
         self._mog2 = _make_mog2()
         self._warmup_count = 0
 
-        # Trạng thái hiện tại của các slot (string: 'free' | 'occupied')
+        # Trạng thái đã xác nhận của các slot
         self._slot_statuses: List[str] = ['free'] * len(self._rois)
         self._slot_updated: List[str]  = [datetime.now().isoformat()] * len(self._rois)
+
+        # Debounce: trạng thái đang chờ xác nhận + số frame liên tiếp
+        self._pending_statuses: List[str] = ['free'] * len(self._rois)
+        self._pending_counts:   List[int] = [0]      * len(self._rois)
 
         # Shared state (giống quetvung3.py: _state + _lock)
         self._lock  = threading.Lock()
@@ -190,11 +197,13 @@ class ZoneScanner:
         """Tải lại ROI từ slot_rois.json (dùng sau khi calibrate lại)."""
         new_rois = _load_rois()
         with self._lock:
-            self._rois            = new_rois
-            self._slot_statuses   = ['free'] * len(new_rois)
-            self._slot_updated    = [datetime.now().isoformat()] * len(new_rois)
-            self._mog2            = _make_mog2()
-            self._warmup_count    = 0
+            self._rois             = new_rois
+            self._slot_statuses    = ['free'] * len(new_rois)
+            self._slot_updated     = [datetime.now().isoformat()] * len(new_rois)
+            self._pending_statuses = ['free'] * len(new_rois)
+            self._pending_counts   = [0]      * len(new_rois)
+            self._mog2             = _make_mog2()
+            self._warmup_count     = 0
             self._state['warming'] = True
         logger.info(f"Đã reload {len(new_rois)} ROI")
 
@@ -209,8 +218,10 @@ class ZoneScanner:
         fh, fw = frame_bgr.shape[:2]
         gray   = _preprocess(frame_bgr)
 
-        # learningRate: -1 trong warm-up (học nhanh), 0.003 sau warm-up
-        lr = -1 if self._warmup_count < WARMUP_FRAMES else 0.003
+        # learningRate: -1 trong warm-up (học nhanh), MOG2_LEARN_RATE sau warm-up.
+        # Dùng tốc độ học rất chậm sau warm-up để xe đứng yên không bị hấp thụ
+        # vào background (tránh xe đỗ lâu bị nhận nhầm là ô trống).
+        lr = -1 if self._warmup_count < WARMUP_FRAMES else MOG2_LEARN_RATE
         fg_mask = self._mog2.apply(gray, learningRate=lr)
 
         # Làm sạch mask
@@ -252,7 +263,7 @@ class ZoneScanner:
             mog2_pct = cv2.countNonZero(fg_mask[y:y+h, x:x+w]) / area
             edge_pct = cv2.countNonZero(edges[y:y+h,   x:x+w]) / area
 
-            # OR logic (học từ quetvung3.py)
+            # OR logic
             if warming:
                 occupied = False
             else:
@@ -264,11 +275,19 @@ class ZoneScanner:
                 'edge_pct': round(edge_pct  * 100, 1),
             }
 
-            # Cập nhật _slot_statuses và ghi nhận thay đổi
+            # ── Debounce: chỉ cập nhật trạng thái sau CONFIRM_FRAMES frame liên tiếp ──
             new_status = 'occupied' if occupied else 'free'
-            if new_status != self._slot_statuses[i]:
-                self._slot_statuses[i]  = new_status
-                self._slot_updated[i]   = datetime.now().isoformat()
+            if new_status == self._pending_statuses[i]:
+                self._pending_counts[i] += 1
+            else:
+                # Trạng thái raw thay đổi → reset bộ đếm
+                self._pending_statuses[i] = new_status
+                self._pending_counts[i]   = 1
+
+            confirmed = (self._pending_counts[i] >= CONFIRM_FRAMES)
+            if confirmed and new_status != self._slot_statuses[i]:
+                self._slot_statuses[i] = new_status
+                self._slot_updated[i]  = datetime.now().isoformat()
                 changes.append({
                     'id':          slot_id,
                     'status':      new_status,

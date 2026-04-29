@@ -57,6 +57,10 @@ def gen_picam_frames():
             cv2.putText(frame, "PiCamera not available",
                        (100, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 2)
 
+        # Resize hoặc fix màu nếu bị ngược (BGR vs RGB)
+        # Sửa lỗi sai màu: Swap Red và Blue channel do mjpeg/browser hiển thị
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
         _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
                + buf.tobytes() + b'\r\n')
@@ -74,6 +78,8 @@ def gen_webcam_frames():
             frame = np.zeros((480, 640, 3), dtype=np.uint8)
             cv2.putText(frame, "Webcam not available", (120, 240),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 2)
+        # Sửa lỗi sai màu cho webcam
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
         yield b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n'
         time.sleep(0.1)

@@ -20,8 +20,10 @@ import logging
 import time
 import os
 import base64
+import csv
 from datetime import datetime
 from typing import Optional, Dict, Set
+import pigpio
 import websockets
 from websockets.server import WebSocketServerProtocol
 
@@ -34,25 +36,38 @@ logger = logging.getLogger('ParkingServer')
 # ============================================================
 # CẤU HÌNH PHẦN CỨNG (GPIO PINS)
 # ============================================================
-SERVO_ENTRY_PIN = 12       # GPIO 12 (Hardware PWM0)
-SERVO_EXIT_PIN = 13        # GPIO 13 (Hardware PWM1)
-IR_ENTRY_PIN = 23          # GPIO 23 (LOW = có xe)
-IR_EXIT_PIN = 24           # GPIO 24 (LOW = có xe)
-BUZZER_PIN = 26            # GPIO 26
+SERVO_ENTRY_PIN = 23
+SERVO_EXIT_PIN = 24
+IR_ENTRY_PIN = 14
+IR_EXIT_PIN = 15
+BUZZER_PIN = 26
 
 # RFID RC522 SPI
-RFID_ENTRY_RST = 17        # RST pin cho RC522 cổng vào
-RFID_EXIT_RST = 27         # RST pin cho RC522 cổng ra
+RFID_ENTRY_RST = 17
+RFID_EXIT_RST = 27
 # RC522 VÀO: SPI0-CE0 (GPIO8)
 # RC522 RA:  SPI0-CE1 (GPIO7)
 
 # LCD I2C
-LCD_ENTRY_ADDR = 0x27      # I2C address LCD cổng vào
-LCD_EXIT_ADDR = 0x20       # I2C address LCD cổng ra
+LCD_ENTRY_ADDR = 0x27
+LCD_EXIT_ADDR = 0x20
+LCD_INFO_ADDR = 0x25  # LCD 16x2 hiển thị số chỗ trống
 
-# Thông số
-BARRIER_CLOSE_DELAY = 4    # Thời gian chờ đóng thanh chắn (giây)
-COST_PER_MINUTE = 1000     # Chi phí gửi xe (VNĐ/phút)
+# ============================================================
+# HIỆU CHỈNH SERVO (CALIBRATION)
+# ============================================================
+SERVO_ENTRY_OFFSET = -15   # độ bù góc cổng VÀO
+SERVO_EXIT_OFFSET  = 0     # độ bù góc cổng RA
+
+SERVO_CLOSE_ANGLE = 0
+SERVO_OPEN_ANGLE  = 90
+
+SERVO_MOVE_TIME     = 1.1   # giây chờ servo di chuyển đến đích
+SERVO_HOLD_TIME     = 0.35  # giây giữ để servo settle trước khi tắt PWM
+SERVO_DEBOUNCE_TIME = 1.8   # giây tối thiểu giữa 2 lệnh servo (chống double-trigger)
+
+BARRIER_CLOSE_DELAY = 4
+COST_PER_MINUTE = 1000
 
 WS_HOST = '0.0.0.0'
 WS_PORT = 8765
@@ -72,6 +87,9 @@ class ParkingState:
 
         # Sessions: card_uid → session data
         self.active_sessions: Dict[str, dict] = {}
+        
+        # History
+        self.history_sessions = []
 
         # Gate states
         self.entry_servo_open = False
@@ -89,12 +107,20 @@ state = ParkingState()
 # PHẦN CỨNG (GPIO, SPI, I2C)
 # ============================================================
 HW_AVAILABLE = False
-servo_entry = None
-servo_exit = None
+# pigpio instance – DMA hardware PWM, không bị preempt bởi OS scheduler
+pi_gpio = None
 rfid_entry = None
 rfid_exit = None
 lcd_entry = None
 lcd_exit = None
+lcd_info = None
+
+# Lock bảo vệ servo – tránh 2 lệnh pigpio chồng nhau
+servo_entry_lock = asyncio.Lock()
+servo_exit_lock  = asyncio.Lock()
+
+# Debounce: timestamp lần gửi lệnh servo gần nhất, key = GPIO pin number
+_servo_last_cmd_time: dict = {}   # pin → float (monotonic timestamp)
 
 # Shared camera manager
 camera_mgr = None
@@ -107,18 +133,30 @@ try:
     GPIO.setmode(GPIO.BCM)
     GPIO.setwarnings(False)
 
-    # Setup GPIO
+    # Setup GPIO (Buzzer + IR – vẫn dùng RPi.GPIO)
     GPIO.setup(BUZZER_PIN, GPIO.OUT)
     GPIO.setup(IR_ENTRY_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    GPIO.setup(IR_EXIT_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    GPIO.setup(SERVO_ENTRY_PIN, GPIO.OUT)
-    GPIO.setup(SERVO_EXIT_PIN, GPIO.OUT)
+    GPIO.setup(IR_EXIT_PIN,  GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-    # PWM cho Servo
-    servo_entry = GPIO.PWM(SERVO_ENTRY_PIN, 50)  # 50Hz
-    servo_exit = GPIO.PWM(SERVO_EXIT_PIN, 50)
-    servo_entry.start(0)
-    servo_exit.start(0)
+    # ── pigpio: DMA hardware PWM cho Servo ────────────────────
+    try:
+        pi_gpio = pigpio.pi()
+        if not pi_gpio.connected:
+            raise RuntimeError("pigpio daemon chưa chạy – hãy chạy: sudo pigpiod")
+
+        def _boot_pulse(angle_deg, offset):
+            a = max(0.0, min(180.0, float(angle_deg + offset)))
+            return max(500, min(2500, int(500 + (a / 180.0) * 2000)))
+
+        pi_gpio.set_servo_pulsewidth(SERVO_ENTRY_PIN, _boot_pulse(SERVO_CLOSE_ANGLE, SERVO_ENTRY_OFFSET))
+        pi_gpio.set_servo_pulsewidth(SERVO_EXIT_PIN,  _boot_pulse(SERVO_CLOSE_ANGLE, SERVO_EXIT_OFFSET))
+        time.sleep(SERVO_MOVE_TIME + SERVO_HOLD_TIME)
+        pi_gpio.set_servo_pulsewidth(SERVO_ENTRY_PIN, 0)
+        pi_gpio.set_servo_pulsewidth(SERVO_EXIT_PIN,  0)
+        logger.info("✅ Servo (pigpio DMA) đã về vị trí đóng")
+    except Exception as _servo_err:
+        logger.warning(f"⚠️  pigpio/Servo không khả dụng: {_servo_err}")
+        pi_gpio = None
 
     # RFID - 2 đầu đọc RC522 trên SPI0
     # Cổng VÀO: SPI0-CE0 (GPIO8), RST=GPIO17
@@ -144,6 +182,13 @@ try:
         logger.warning(f"Không thể kết nối LCD cổng ra (I2C: 0x{LCD_EXIT_ADDR:02X})")
         lcd_exit = None
 
+    try:
+        lcd_info = CharLCD(i2c_expander='PCF8574', address=LCD_INFO_ADDR, port=1,
+                            cols=16, rows=2, dotsize=8)
+    except OSError:
+        logger.warning(f"Không thể kết nối LCD thông tin (I2C: 0x{LCD_INFO_ADDR:02X})")
+        lcd_info = None
+
     HW_AVAILABLE = True
     logger.info("Phần cứng GPIO/SPI/I2C khởi tạo thành công")
 
@@ -158,7 +203,7 @@ except Exception as e:
 # ============================================================
 
 def buzzer_beep(times: int, duration: float = 0.15, gap: float = 0.1):
-    """Kêu buzzer số lần chỉ định."""
+    """Kêu buzzer số lần chỉ định (blocking – gọi từ thread riêng)."""
     if not HW_AVAILABLE:
         logger.info(f"[SIM] Buzzer: {times} beeps")
         return
@@ -170,36 +215,83 @@ def buzzer_beep(times: int, duration: float = 0.15, gap: float = 0.1):
             time.sleep(gap)
 
 
-def servo_set_angle(servo_pwm, angle: int):
-    """Đặt góc servo (0=đóng, 90=mở)."""
-    if servo_pwm is None:
+async def buzzer_beep_async(times: int, duration: float = 0.15, gap: float = 0.1):
+    """Kêu buzzer bất đồng bộ – không block event loop."""
+    await asyncio.to_thread(buzzer_beep, times, duration, gap)
+
+
+async def lcd_display_async(gate_type: str, lines: list):
+    """Ghi LCD bất đồng bộ – không block event loop."""
+    await asyncio.to_thread(lcd_display, gate_type, lines)
+
+
+def set_servo_angle(pin: int, angle: int, offset: int = 0):
+    """
+    Điều khiển servo bằng pigpio DMA hardware PWM (blocking).
+
+    - Tính pulsewidth từ góc + offset hiệu chỉnh.
+    - Debounce per-pin: bỏ qua nếu lệnh đến quá sát lệnh trước.
+    - Gửi xung → chờ servo đến vị trí → settle → tắt xung.
+
+    Pulse SG90: 0° = 500µs, 90° = 1500µs, 180° = 2500µs
+    """
+    if pi_gpio is None or not pi_gpio.connected:
+        logger.info(f"[SIM] Servo GPIO{pin} → {angle}° (offset {offset:+d})")
         return
-    duty = 2 + (angle / 18)
-    servo_pwm.ChangeDutyCycle(duty)
-    time.sleep(0.5)
-    servo_pwm.ChangeDutyCycle(0)  # Tắt PWM để tránh rung
+
+    now = time.monotonic()
+    if now - _servo_last_cmd_time.get(pin, 0.0) < SERVO_DEBOUNCE_TIME:
+        logger.debug(f"[SERVO] Debounce bỏ qua lệnh GPIO{pin}")
+        return
+    _servo_last_cmd_time[pin] = now
+
+    clamped = max(0.0, min(180.0, float(angle + offset)))
+    pulse = max(500, min(2500, int(500 + (clamped / 180.0) * 2000)))
+
+    try:
+        pi_gpio.set_servo_pulsewidth(pin, pulse)
+        time.sleep(SERVO_MOVE_TIME)
+        time.sleep(SERVO_HOLD_TIME)
+        pi_gpio.set_servo_pulsewidth(pin, 0)   # tắt PWM sau khi servo ổn định
+        logger.debug(f"Servo GPIO{pin} → {angle}° (offset {offset:+d}) | {pulse}µs")
+    except Exception as e:
+        logger.error(f"Servo GPIO{pin} error: {e}")
 
 
-def open_barrier(gate_type: str):
-    """Mở thanh chắn."""
-    if gate_type == 'entry':
-        servo_set_angle(servo_entry, 90)
-        state.entry_servo_open = True
-    else:
-        servo_set_angle(servo_exit, 90)
-        state.exit_servo_open = True
-    logger.info(f"[{gate_type.upper()}] Thanh chắn MỞ")
+async def open_barrier_async(gate_type: str):
+    """Mở thanh chắn bất đồng bộ, có lock + guard chống double-open."""
+    lock = servo_entry_lock if gate_type == 'entry' else servo_exit_lock
+    async with lock:
+        already_open = state.entry_servo_open if gate_type == 'entry' else state.exit_servo_open
+        if already_open:
+            logger.debug(f"[{gate_type.upper()}] open_barrier_async bỏ qua – đã mở")
+            return
+        pin    = SERVO_ENTRY_PIN    if gate_type == 'entry' else SERVO_EXIT_PIN
+        offset = SERVO_ENTRY_OFFSET if gate_type == 'entry' else SERVO_EXIT_OFFSET
+        await asyncio.to_thread(set_servo_angle, pin, SERVO_OPEN_ANGLE, offset)
+        if gate_type == 'entry':
+            state.entry_servo_open = True
+        else:
+            state.exit_servo_open = True
+        logger.info(f"[{gate_type.upper()}] Thanh chắn MỞ")
 
 
-def close_barrier(gate_type: str):
-    """Đóng thanh chắn."""
-    if gate_type == 'entry':
-        servo_set_angle(servo_entry, 0)
-        state.entry_servo_open = False
-    else:
-        servo_set_angle(servo_exit, 0)
-        state.exit_servo_open = False
-    logger.info(f"[{gate_type.upper()}] Thanh chắn ĐÓNG")
+async def close_barrier_async(gate_type: str):
+    """Đóng thanh chắn bất đồng bộ, có lock + guard chống double-close."""
+    lock = servo_entry_lock if gate_type == 'entry' else servo_exit_lock
+    async with lock:
+        already_closed = not (state.entry_servo_open if gate_type == 'entry' else state.exit_servo_open)
+        if already_closed:
+            logger.debug(f"[{gate_type.upper()}] close_barrier_async bỏ qua – đã đóng")
+            return
+        pin    = SERVO_ENTRY_PIN    if gate_type == 'entry' else SERVO_EXIT_PIN
+        offset = SERVO_ENTRY_OFFSET if gate_type == 'entry' else SERVO_EXIT_OFFSET
+        await asyncio.to_thread(set_servo_angle, pin, SERVO_CLOSE_ANGLE, offset)
+        if gate_type == 'entry':
+            state.entry_servo_open = False
+        else:
+            state.exit_servo_open = False
+        logger.info(f"[{gate_type.upper()}] Thanh chắn ĐÓNG")
 
 
 def read_ir(gate_type: str) -> bool:
@@ -223,6 +315,24 @@ def lcd_display(gate_type: str, lines: list):
             lcd.write_string(line[:20].ljust(20))
     except Exception as e:
         logger.error(f"LCD error: {e}")
+
+
+def update_lcd_info(available, total):
+    """Hiển thị số chỗ trống lên LCD 16x2."""
+    if lcd_info is None:
+        logger.info(f"[SIM] LCD INFO: Cho trong: {available}/{total}")
+        return
+    try:
+        lcd_info.clear()
+        lcd_info.cursor_pos = (0, 0)
+        lcd_info.write_string("BAI DAU XE DATN ")
+        lcd_info.cursor_pos = (1, 0)
+        lcd_info.write_string(f"Cho trong: {available}/{total}".ljust(16))
+    except Exception as e:
+        logger.error(f"LCD INFO error: {e}")
+
+async def update_lcd_info_async(available, total):
+    await asyncio.to_thread(update_lcd_info, available, total)
 
 
 def rfid_read_card(gate_type: str) -> Optional[str]:
@@ -454,21 +564,21 @@ async def handle_entry_rfid(card_uid: str):
 
     logger.info(f"[ENTRY] Thẻ quẹt: {card_uid}")
 
-    # Gửi sự kiện quẹt thẻ
+    # Gửi sự kiện quẹt thẻ ngay lập tức
     await broadcast({
         'type': 'rfid_scanned',
         'payload': {'gateType': 'entry', 'cardUID': card_uid},
         'timestamp': now.isoformat(),
     })
 
-    # LCD: Đang xử lý
-    lcd_lines = ['     CONG VAO       ', f'Thoi gian: {time_str}', 'Bien so xe: ...     ', 'Trang thai: XU LY  ']
-    lcd_display('entry', lcd_lines)
-    await send_lcd_update('entry', lcd_lines)
+    # LCD "XU LY" + broadcast song song (không đợi LCD xong)
+    lcd_processing = ['     CONG VAO       ', f'Thoi gian: {time_str}', 'Bien so xe: ...     ', 'Trang thai: XU LY  ']
+    asyncio.create_task(lcd_display_async('entry', lcd_processing))
+    await send_lcd_update('entry', lcd_processing)
 
-    # Chụp và xử lý biển số
+    # Chụp và xử lý biển số trong thread riêng (không block event loop)
     if plate_processor:
-        result = plate_processor.capture_and_process(gate_type='entry')
+        result = await asyncio.to_thread(plate_processor.capture_and_process, 'entry')
     else:
         # Simulation
         result = type('R', (), {
@@ -481,22 +591,24 @@ async def handle_entry_rfid(card_uid: str):
         # === THÀNH CÔNG ===
         plate_text = result.plate_text
 
-        # Buzzer 2 tít
-        buzzer_beep(2)
-        await send_buzzer('entry', 'success')
-
-        # Ghi biển số vào thẻ RFID
-        rfid_write_plate('entry', plate_text)
-
-        # Cập nhật LCD
+        # Cập nhật LCD kết quả
         lcd_lines = [
             '     CONG VAO       ',
             f'Thoi gian: {time_str}',
             f'Bien so: {plate_text[:11].ljust(11)}',
             'Trang thai: MOI VAO '
         ]
-        lcd_display('entry', lcd_lines)
+
+        # Broadcast lên web TRƯỚC (không đợi buzzer/LCD)
+        await send_buzzer('entry', 'success')
         await send_lcd_update('entry', lcd_lines)
+
+        # Chạy buzzer + LCD song song trong background (không block web)
+        asyncio.create_task(buzzer_beep_async(2))
+        asyncio.create_task(lcd_display_async('entry', lcd_lines))
+
+        # Ghi biển số vào thẻ RFID trong thread riêng
+        asyncio.create_task(asyncio.to_thread(rfid_write_plate, 'entry', plate_text))
 
         # Gửi kết quả lên Dashboard
         plate_image_url = f'/captures/{os.path.basename(result.plate_image_path)}' if result.plate_image_path else ''
@@ -518,6 +630,7 @@ async def handle_entry_rfid(card_uid: str):
             'matched': None,
         }
         state.active_sessions[card_uid] = session
+        state.history_sessions.append(session)
         state.total_in += 1
         state.available_slots = max(0, state.available_slots - 1)
 
@@ -528,19 +641,19 @@ async def handle_entry_rfid(card_uid: str):
 
     else:
         # === THẤT BẠI ===
-        buzzer_beep(3)
+        # Broadcast web TRƯỚC, buzzer/LCD chạy background
         await send_buzzer('entry', 'error')
-
         lcd_lines = [
             '     CONG VAO       ',
             f'Thoi gian: {time_str}',
             'Bien so: LOI        ',
             'Trang thai: THU LAI '
         ]
-        lcd_display('entry', lcd_lines)
         await send_lcd_update('entry', lcd_lines)
+        asyncio.create_task(buzzer_beep_async(3))
+        asyncio.create_task(lcd_display_async('entry', lcd_lines))
 
-        logger.warning(f"[ENTRY] Thất bại: {result.error}")
+        logger.warning(f"[ENTRY] Thất bại: {getattr(result, 'error', 'unknown')}")
 
 
 async def handle_exit_rfid(card_uid: str):
@@ -561,26 +674,26 @@ async def handle_exit_rfid(card_uid: str):
 
     logger.info(f"[EXIT] Thẻ quẹt: {card_uid}")
 
-    # Gửi sự kiện quẹt thẻ
+    # Gửi sự kiện quẹt thẻ ngay lập tức
     await broadcast({
         'type': 'rfid_scanned',
         'payload': {'gateType': 'exit', 'cardUID': card_uid},
         'timestamp': now.isoformat(),
     })
 
-    # LCD: Đang xử lý
-    lcd_lines = ['      CONG RA       ', f'Thoi gian: {time_str}', 'Bien so xe: ...     ', 'Trang thai: XU LY  ']
-    lcd_display('exit', lcd_lines)
-    await send_lcd_update('exit', lcd_lines)
+    # LCD "XU LY" chạy background, broadcast web ngay
+    lcd_processing = ['      CONG RA       ', f'Thoi gian: {time_str}', 'Bien so xe: ...     ', 'Trang thai: XU LY  ']
+    asyncio.create_task(lcd_display_async('exit', lcd_processing))
+    await send_lcd_update('exit', lcd_processing)
 
-    # Đọc biển số từ thẻ (đã ghi lúc vào)
-    plate_from_card = rfid_read_plate('exit')
+    # Đọc biển số từ thẻ và chụp ảnh song song
+    plate_from_card = await asyncio.to_thread(rfid_read_plate, 'exit')
     if plate_from_card is None and card_uid in state.active_sessions:
         plate_from_card = state.active_sessions[card_uid].get('plateIn', '')
 
-    # Chụp và xử lý biển số hiện tại
+    # Chụp và xử lý biển số trong thread riêng
     if plate_processor:
-        result = plate_processor.capture_and_process(gate_type='exit')
+        result = await asyncio.to_thread(plate_processor.capture_and_process, 'exit')
     else:
         result = type('R', (), {
             'success': True, 'plate_text': plate_from_card or '51G-888.88',
@@ -589,17 +702,17 @@ async def handle_exit_rfid(card_uid: str):
         })()
 
     if not result.success:
-        buzzer_beep(3)
+        # Broadcast web TRƯỚC, buzzer/LCD background
         await send_buzzer('exit', 'error')
-
         lcd_lines = [
             '      CONG RA       ',
             f'Thoi gian: {time_str}',
             'Bien so: LOI        ',
             'Trang thai: THU LAI '
         ]
-        lcd_display('exit', lcd_lines)
         await send_lcd_update('exit', lcd_lines)
+        asyncio.create_task(buzzer_beep_async(3))
+        asyncio.create_task(lcd_display_async('exit', lcd_lines))
         return
 
     plate_current = result.plate_text
@@ -613,10 +726,6 @@ async def handle_exit_rfid(card_uid: str):
 
     if is_matched:
         # === KHỚP ===
-        buzzer_beep(2)
-        await send_buzzer('exit', 'success')
-
-        # Tính chi phí
         session = state.active_sessions.get(card_uid)
         duration_minutes = 0
         cost = 0
@@ -627,7 +736,6 @@ async def handle_exit_rfid(card_uid: str):
             duration_minutes = int(duration.total_seconds() / 60)
             cost = max(COST_PER_MINUTE, duration_minutes * COST_PER_MINUTE)
 
-        # LCD hiển thị chi phí
         cost_str = f'{cost:,}'.replace(',', '.')
         lcd_lines = [
             '      CONG RA       ',
@@ -635,8 +743,12 @@ async def handle_exit_rfid(card_uid: str):
             f'Bien so: {plate_current[:11].ljust(11)}',
             f'Phi: {cost_str} VND    '[:20]
         ]
-        lcd_display('exit', lcd_lines)
+
+        # Broadcast web TRƯỚC, buzzer/LCD chạy background
+        await send_buzzer('exit', 'success')
         await send_lcd_update('exit', lcd_lines)
+        asyncio.create_task(buzzer_beep_async(2))
+        asyncio.create_task(lcd_display_async('exit', lcd_lines))
 
         # Cập nhật session
         if session:
@@ -647,29 +759,35 @@ async def handle_exit_rfid(card_uid: str):
             session['cost'] = cost
             session['matched'] = True
             await send_session_update(session)
+            
+            # Xóa session khỏi bộ nhớ hệ thống (chỉ lưu trên web history)
+            del state.active_sessions[card_uid]
 
         state.total_out += 1
         state.available_slots = min(state.total_slots, state.available_slots + 1)
         state.last_cost = cost
         await send_stats()
 
+        # Xóa nội dung biển số lưu trong thẻ RFID
+        asyncio.create_task(asyncio.to_thread(rfid_write_plate, 'exit', ''))
+
         logger.info(f"[EXIT] Khớp! {plate_current} = {plate_from_card}, Chi phí: {cost} VNĐ ({duration_minutes} phút)")
 
     else:
         # === KHÔNG KHỚP ===
-        buzzer_beep(3)
-        await send_buzzer('exit', 'error')
-
         lcd_lines = [
             '      CONG RA       ',
             f'Thoi gian: {time_str}',
             f'Bien so: {plate_current[:11].ljust(11)}',
             'Trang thai: LOI     '
         ]
-        lcd_display('exit', lcd_lines)
-        await send_lcd_update('exit', lcd_lines)
 
-        # Cập nhật session
+        # Broadcast web TRƯỚC, buzzer/LCD chạy background
+        await send_buzzer('exit', 'error')
+        await send_lcd_update('exit', lcd_lines)
+        asyncio.create_task(buzzer_beep_async(3))
+        asyncio.create_task(lcd_display_async('exit', lcd_lines))
+
         session = state.active_sessions.get(card_uid)
         if session:
             session['plateOut'] = plate_current
@@ -717,17 +835,17 @@ async def handle_barrier_auto_close(gate_type: str):
         })
         await asyncio.sleep(1)
 
-    # Đóng thanh chắn
-    close_barrier(gate_type)
+    # Đóng thanh chắn qua lock (tránh chồng lệnh PWM)
+    await close_barrier_async(gate_type)
     await send_gate_status(gate_type)
 
-    # Reset LCD
+    # Reset LCD background
     if gate_type == 'entry':
         lcd_lines = ['     CONG VAO       ', 'Thoi gian:          ', 'Bien so xe:         ', 'Trang thai: SAN SANG']
     else:
         lcd_lines = ['      CONG RA       ', 'Thoi gian:          ', 'Bien so xe:         ', 'Trang thai: SAN SANG']
-    lcd_display(gate_type, lcd_lines)
     await send_lcd_update(gate_type, lcd_lines)
+    asyncio.create_task(lcd_display_async(gate_type, lcd_lines))
 
     logger.info(f"[{gate_type.upper()}] Thanh chắn đã đóng")
 
@@ -763,16 +881,59 @@ async def ws_handler(websocket: WebSocketServerProtocol):
 
                 if cmd_type == 'open_gate':
                     gate_type = payload.get('gateType', 'entry')
-                    open_barrier(gate_type)
+                    # Mở barrier qua lock rồi chạy auto-close — không block WS handler
+                    async def _open_then_autoclose(gt: str):
+                        await open_barrier_async(gt)
+                        await handle_barrier_auto_close(gt)
+                    asyncio.create_task(_open_then_autoclose(gate_type))
                     await send_gate_status(gate_type)
-                    # Bắt đầu theo dõi auto-close
-                    asyncio.create_task(handle_barrier_auto_close(gate_type))
 
                 elif cmd_type == 'update_settings':
                     global COST_PER_MINUTE
                     if 'costPerMinute' in payload:
                         COST_PER_MINUTE = payload['costPerMinute']
                         logger.info(f"Cập nhật phí: {COST_PER_MINUTE} VNĐ/phút")
+                
+                elif cmd_type == 'export_and_reset':
+                    if not os.path.exists('exports'):
+                        os.makedirs('exports')
+                    
+                    filename = f"exports/History_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                    try:
+                        with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
+                            writer = csv.writer(f)
+                            writer.writerow(['Session ID', 'UID The', 'Bien so vao', 'Gio vao', 'Bien so ra', 'Gio ra', 'Thoi gian (phut)', 'Chi phi (VND)', 'Trang thai'])
+                            for s in state.history_sessions:
+                                status = 'Da ra' if s.get('timeOut') else 'Dang trong bai'
+                                writer.writerow([
+                                    s.get('id', ''),
+                                    s.get('cardUID', ''),
+                                    s.get('plateIn', ''),
+                                    s.get('timeIn', ''),
+                                    s.get('plateOut', ''),
+                                    s.get('timeOut', ''),
+                                    s.get('durationMinutes', ''),
+                                    s.get('cost', ''),
+                                    status
+                                ])
+                        logger.info(f"Da xuat file: {filename}")
+                    except Exception as e:
+                        logger.error(f"Loi xuat file: {e}")
+                    
+                    # Reset stats, clear history but KEEP active sessions
+                    state.total_in = len(state.active_sessions) # Nhung xe con trong bai duoc tinh la xe vao? Khong, reset luon ve 0 theo yeu cau.
+                    # Nguoi dung muon reset "tổng xe vào, tổng xe ra", co nghia la trong ca lam viec moi.
+                    state.total_in = 0
+                    state.total_out = 0
+                    state.last_cost = None
+                    state.history_sessions = []
+                    
+                    await send_stats()
+                    await broadcast({
+                        'type': 'reset_history',
+                        'payload': {},
+                        'timestamp': datetime.now().isoformat()
+                    })
 
                 else:
                     logger.warning(f"Unknown command: {cmd_type}")
@@ -796,19 +957,19 @@ async def rfid_polling_loop():
     logger.info("RFID polling started")
 
     while True:
-        # Poll cổng VÀO (RC522 #1 trên SPI0-CE0)
-        card_uid = rfid_read_card('entry')
+        # Poll cổng VÀO (RC522 #1 trên SPI0-CE0) trong thread riêng
+        card_uid = await asyncio.to_thread(rfid_read_card, 'entry')
         if card_uid:
             await handle_entry_rfid(card_uid)
             await asyncio.sleep(2)  # Debounce
 
-        # Poll cổng RA (RC522 #2 trên SPI0-CE1)
-        card_uid_exit = rfid_read_card('exit')
+        # Poll cổng RA (RC522 #2 trên SPI0-CE1) trong thread riêng
+        card_uid_exit = await asyncio.to_thread(rfid_read_card, 'exit')
         if card_uid_exit:
             await handle_exit_rfid(card_uid_exit)
             await asyncio.sleep(2)  # Debounce
 
-        await asyncio.sleep(0.2)  # 5 lần/giây
+        await asyncio.sleep(0.05)  # Poll nhanh hơn: 20 lần/giây
 
 
 # ============================================================
@@ -832,9 +993,14 @@ async def ir_polling_loop():
         await asyncio.sleep(0.1)
 
 
+
 from zone_scanner import ZoneScanner
 
 async def on_slot_change(all_statuses):
+    free_count = sum(1 for slot in all_statuses if slot['status'] == 'free')
+    total_count = len(all_statuses)
+    asyncio.create_task(update_lcd_info_async(free_count, total_count))
+    
     await broadcast({
         'type': 'slot_update',
         'payload': {'slots': all_statuses},
@@ -882,6 +1048,7 @@ async def main():
     # Reset LCD
     lcd_display('entry', ['     CONG VAO       ', 'Thoi gian:          ', 'Bien so xe:         ', 'Trang thai: SAN SANG'])
     lcd_display('exit',  ['      CONG RA       ', 'Thoi gian:          ', 'Bien so xe:         ', 'Trang thai: SAN SANG'])
+    update_lcd_info(state.total_slots, state.total_slots)  # Cập nhật ban đầu mặc định, sau đó update từ webcam
 
     # ── Start MJPEG streaming server (dùng shared camera) ─────
     try:
@@ -922,6 +1089,11 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:
+        if pi_gpio and pi_gpio.connected:
+            pi_gpio.set_servo_pulsewidth(SERVO_ENTRY_PIN, 0)
+            pi_gpio.set_servo_pulsewidth(SERVO_EXIT_PIN, 0)
+            pi_gpio.stop()
+            logger.info("Servo PWM đã tắt")
         if HW_AVAILABLE:
             GPIO.cleanup()
         if plate_processor:

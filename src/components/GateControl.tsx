@@ -13,15 +13,12 @@ export default function GateControl({ gate, gateType, plateRecognized, className
   const { sendCommand } = useParkingContext();
   const [countdown, setCountdown] = useState<number | null>(null);
   const isEntry = gateType === 'entry';
-  const canOpen = plateRecognized && gate.servo === 'closed';
-
   const handleOpenGate = useCallback(() => {
-    if (!canOpen) return;
     sendCommand({
       type: 'open_gate',
       payload: { gateType },
     });
-  }, [canOpen, gateType, sendCommand]);
+  }, [gateType, sendCommand]);
 
   // Countdown effect when barrier is closing
   useEffect(() => {
@@ -81,48 +78,23 @@ export default function GateControl({ gate, gateType, plateRecognized, className
         </div>
       </div>
 
-      {/* Barrier Animation */}
-      <div className="relative h-8 bg-slate-100 rounded-lg overflow-hidden flex items-center">
-        <div className="absolute left-3 w-4 h-full flex items-center">
-          <div className="w-3 h-3 rounded-sm bg-slate-400" />
-        </div>
-        <div
-          className={`absolute left-6 h-1.5 rounded-r-full transition-all duration-700 ease-in-out ${
-            gate.servo === 'open'
-              ? 'bg-emerald-400 w-[15%]'
-              : 'bg-red-400 w-[85%]'
-          }`}
-          style={{
-            transformOrigin: 'left center',
-          }}
-        />
-        <div className={`absolute right-3 text-[10px] font-bold uppercase tracking-wider ${
-          gate.servo === 'open' ? 'text-emerald-600' : 'text-slate-500'
-        }`}>
-          {gate.servo === 'open' ? '↑ THANH CHẮN MỞ' : '── THANH CHẮN ĐÓNG'}
-        </div>
-      </div>
+
 
       {/* Open Gate Button */}
       <button
         onClick={handleOpenGate}
-        disabled={!canOpen}
         className={`w-full py-4 rounded-2xl font-headline font-bold text-base shadow-lg transition-all flex items-center justify-center gap-3 ${
-          canOpen
-            ? isEntry
-              ? 'bg-gradient-to-br from-primary to-primary-container text-on-primary hover:shadow-primary/30 hover:scale-[1.02] active:scale-95'
-              : 'bg-gradient-to-br from-secondary to-emerald-800 text-white hover:shadow-secondary/30 hover:scale-[1.02] active:scale-95'
-            : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+          isEntry
+            ? 'bg-gradient-to-br from-primary to-primary-container text-on-primary hover:shadow-primary/30 hover:scale-[1.02] active:scale-95'
+            : 'bg-gradient-to-br from-secondary to-emerald-800 text-white hover:shadow-secondary/30 hover:scale-[1.02] active:scale-95'
         }`}
       >
         <span className="material-symbols-outlined">
-          {gate.servo === 'open' ? 'door_front' : canOpen ? 'lock_open' : 'lock'}
+          {gate.servo === 'open' ? 'door_front' : 'lock_open'}
         </span>
         {gate.servo === 'open'
           ? (countdown ? `ĐANG ĐÓNG (${countdown}s)` : 'THANH CHẮN ĐANG MỞ')
-          : canOpen
-            ? `MỞ THANH CHẮN - ${isEntry ? 'CỔNG VÀO' : 'CỔNG RA'}`
-            : 'CHỜ QUẸT THẺ & NHẬN DIỆN BSX'}
+          : `MỞ THANH CHẮN - ${isEntry ? 'CỔNG VÀO' : 'CỔNG RA'}`}
       </button>
     </div>
   );

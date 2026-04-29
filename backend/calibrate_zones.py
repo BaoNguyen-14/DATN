@@ -151,7 +151,13 @@ let startX=0, startY=0, endX=0, endY=0, drawing=false;
 
 function getXY(e) {
   const r = canvas.getBoundingClientRect();
-  return [Math.round(e.clientX - r.left), Math.round(e.clientY - r.top)];
+  // Scale từ tọa độ display (CSS px) sang tọa độ nội bộ canvas (640×480)
+  const scaleX = canvas.width  / r.width;
+  const scaleY = canvas.height / r.height;
+  return [
+    Math.round((e.clientX - r.left) * scaleX),
+    Math.round((e.clientY - r.top)  * scaleY),
+  ];
 }
 function draw(x,y,w,h, color='#fb923c') {
   ctx.clearRect(0,0,canvas.width,canvas.height);

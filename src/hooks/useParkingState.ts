@@ -69,7 +69,8 @@ type Action =
   | { type: 'BUZZER_FEEDBACK'; payload: BuzzerFeedbackPayload }
   | { type: 'SESSION_UPDATE'; payload: SessionUpdatePayload }
   | { type: 'STATS_UPDATE'; payload: StatsPayload }
-  | { type: 'ADD_SESSION'; payload: ParkingSession };
+  | { type: 'ADD_SESSION'; payload: ParkingSession }
+  | { type: 'RESET_HISTORY' };
 
 // ===== Reducer =====
 function parkingReducer(state: ParkingAppState, action: Action): ParkingAppState {
@@ -140,6 +141,9 @@ function parkingReducer(state: ParkingAppState, action: Action): ParkingAppState
         sessions: [action.payload, ...state.sessions].slice(0, 100),
       };
 
+    case 'RESET_HISTORY':
+      return { ...state, sessions: [] };
+
     default:
       return state;
   }
@@ -194,6 +198,9 @@ export function ParkingProvider({ children }: { children: React.ReactNode }) {
         break;
       case 'stats_update':
         dispatch({ type: 'STATS_UPDATE', payload: message.payload as StatsPayload });
+        break;
+      case 'reset_history':
+        dispatch({ type: 'RESET_HISTORY' });
         break;
       case 'connection_ack':
         console.log('[Parking] Connection acknowledged by Pi');

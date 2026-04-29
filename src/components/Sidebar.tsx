@@ -12,7 +12,9 @@ export default function Sidebar() {
   return (
     <aside className="hidden lg:flex flex-col h-screen w-20 fixed left-0 top-0 bg-slate-50 border-r border-slate-200 z-50 py-8 overflow-hidden items-center justify-between">
       <div className="flex flex-col items-center gap-8 w-full">
-        <div className="text-lg font-black text-blue-900">SP</div>
+        <div className="w-12 h-12 flex items-center justify-center mt-2 hover:scale-105 transition-transform cursor-pointer">
+          <img src="/logo.png" alt="BK Logo" className="w-full h-full object-contain drop-shadow-sm" />
+        </div>
         <nav className="flex flex-col w-full">
           {navItems.map((item) => (
             <NavLink
@@ -42,11 +44,6 @@ export default function Sidebar() {
             </NavLink>
           ))}
         </nav>
-      </div>
-      <div className="flex flex-col items-center gap-4">
-        <button className="text-slate-400 hover:text-blue-900 transition-colors">
-          <span className="material-symbols-outlined">support_agent</span>
-        </button>
       </div>
     </aside>
   );

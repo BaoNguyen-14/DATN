@@ -13,8 +13,8 @@ from typing import Optional
 
 logger = logging.getLogger('WebcamManager')
 
-WEBCAM_W, WEBCAM_H = 640, 480
-WEBCAM_FPS = 10
+WEBCAM_W, WEBCAM_H = 640, 480   # kích thước output sau khi resize phần mềm
+WEBCAM_FPS = 10                  # FPS capture
 
 
 class WebcamManager:
@@ -44,6 +44,11 @@ class WebcamManager:
                 self._cap = cv2.VideoCapture(idx)
                 
             if self._cap.isOpened():
+                # KHÔNG set WIDTH/HEIGHT ở đây để tránh driver crop hình (zoom in).
+                # Camera sẽ chạy ở native resolution; frame được resize bằng phần mềm
+                # trong _capture_loop → giữ nguyên góc nhìn đầy đủ của webcam.
+                self._cap.set(cv2.CAP_PROP_FPS, WEBCAM_FPS)
+
                 # Đọc thử 1 frame để chắc chắn đây là camera thật (không phải luồng data của PiCam)
                 ret, frame = self._cap.read()
                 if ret and frame is not None:
@@ -57,10 +62,6 @@ class WebcamManager:
         if self._cap is None or not self._cap.isOpened():
             logger.error(f"Không mở được webcam nào cả.")
             return False
-
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, WEBCAM_W)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, WEBCAM_H)
-        self._cap.set(cv2.CAP_PROP_FPS, WEBCAM_FPS)
 
         self._available = True
         self._running = True
@@ -80,6 +81,9 @@ class WebcamManager:
                 break
             ret, frame = self._cap.read()
             if ret:
+                # Resize phần mềm về kích thước chuẩn (không crop, không zoom)
+                frame = cv2.resize(frame, (WEBCAM_W, WEBCAM_H),
+                                   interpolation=cv2.INTER_LINEAR)
                 with self._lock:
                     self._latest_frame = frame
             time.sleep(1 / WEBCAM_FPS)
