@@ -25,6 +25,7 @@ export interface GateState {
 export interface PlateResult {
   plateText: string;
   imageUrl: string;       // URL to captured plate image
+  fullImageUrl: string;   // URL to full context image
   timestamp: string;      // ISO timestamp
   confidence: number;     // 0-100
   gateType: GateType;
@@ -45,7 +46,9 @@ export interface ParkingSession {
   plateIn: string;
   plateOut: string | null;
   plateImageIn: string;
+  fullImageIn: string;
   plateImageOut: string | null;
+  fullImageOut: string | null;
   timeIn: string;         // ISO timestamp
   timeOut: string | null;  // ISO timestamp
   durationMinutes: number | null;

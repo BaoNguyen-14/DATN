@@ -10,7 +10,7 @@ Sử dụng shared CameraManager để tránh xung đột PiCamera2.
 Dashboard dùng: <img src="http://192.168.1.9:8080/entry">
 """
 
-from flask import Flask, Response, request, jsonify, send_from_directory
+from flask import Flask, Response, request, jsonify
 import cv2
 import json
 import os
@@ -127,13 +127,6 @@ def get_rois():
         logger.warning(f'Cannot read slot_rois.json: {e}')
         rois = []
     return jsonify({'rois': rois})
-
-
-@app.route('/captures/<filename>')
-def serve_capture(filename):
-    """Phục vụ ảnh biển số đã chụp."""
-    capture_dir = os.path.join(os.path.dirname(__file__), 'captures')
-    return send_from_directory(capture_dir, filename)
 
 
 def run_server(host='0.0.0.0', port=8080):

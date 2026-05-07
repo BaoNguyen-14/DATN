@@ -1,13 +1,27 @@
 import { useParkingContext } from '../hooks/useParkingState';
+import React from 'react';
+import ImageModal from '../components/ImageModal';
 
 export default function History() {
-  const { state } = useParkingContext();
+  const { state, wsUrl } = useParkingContext();
   const { sessions } = state;
+
+  const baseUrl = React.useMemo(() => {
+    try {
+      const url = new URL(wsUrl.replace('ws://', 'http://').replace('wss://', 'https://'));
+      return `${url.protocol}//${url.hostname}:8080`;
+    } catch {
+      return 'http://raspberrypi.local:8080';
+    }
+  }, [wsUrl]);
+
+  const [selectedImage, setSelectedImage] = React.useState<{ url: string, title: string } | null>(null);
 
   const todayCount = sessions.length;
   const totalRevenue = sessions.reduce((sum, s) => sum + (s.cost || 0), 0);
 
   return (
+    <>
     <main className="flex-1 p-4 md:p-8">
       <div className="max-w-7xl mx-auto">
         {/* Page Header & Stats */}
@@ -111,8 +125,20 @@ export default function History() {
                       <td className="px-6 py-5">
                         <div className="flex items-center gap-3">
                           {session.plateImageIn && (
-                            <div className="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0 bg-slate-200">
-                              <img className="w-full h-full object-cover" alt="Ảnh biển số" src={session.plateImageIn} />
+                            <div className="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0 bg-slate-200 cursor-pointer hover:ring-2 hover:ring-primary transition-all"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedImage({
+                                  url: session.fullImageIn ? `${baseUrl}${session.fullImageIn}` : (session.plateImageIn.startsWith('http') ? session.plateImageIn : `${baseUrl}${session.plateImageIn}`),
+                                  title: `Ảnh lúc vào - Biển số: ${session.plateIn}`
+                                });
+                              }}
+                            >
+                              <img 
+                                className="w-full h-full object-cover" 
+                                alt="Ảnh biển số" 
+                                src={session.plateImageIn.startsWith('http') ? session.plateImageIn : `${baseUrl}${session.plateImageIn}`} 
+                              />
                             </div>
                           )}
                           <span className="text-sm font-bold text-on-surface">{session.plateIn}</span>
@@ -160,5 +186,13 @@ export default function History() {
         </div>
       </div>
     </main>
+    {selectedImage && (
+      <ImageModal 
+        url={selectedImage.url} 
+        title={selectedImage.title} 
+        onClose={() => setSelectedImage(null)} 
+      />
+    )}
+    </>
   );
 }

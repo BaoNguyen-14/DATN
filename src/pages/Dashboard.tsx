@@ -1,6 +1,7 @@
 import { useParkingContext } from '../hooks/useParkingState';
-import { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import GateControl from '../components/GateControl';
+import ImageModal from '../components/ImageModal';
 import type { GateType, PlateResult, GateState, LCDContent, BuzzerFeedback } from '../types/parking';
 
 
@@ -26,7 +27,19 @@ export default function Dashboard() {
     }
   }, [wsUrl]);
 
+  const baseHttpUrl = useMemo(() => {
+    try {
+      const url = new URL(wsUrl.replace('ws://', 'http://').replace('wss://', 'https://'));
+      return `${url.protocol}//${url.hostname}:8080`;
+    } catch {
+      return 'http://raspberrypi.local:8080';
+    }
+  }, [wsUrl]);
+
+  const [selectedImage, setSelectedImage] = useState<{ url: string, title: string } | null>(null);
+
   return (
+    <>
     <main className="p-4 md:p-6 flex flex-col gap-4 max-w-[1600px] mx-auto w-full h-screen overflow-hidden">
       {/* ===== Stats Row ===== */}
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-shrink-0">
@@ -60,6 +73,8 @@ export default function Dashboard() {
           plate={entryPlate}
           buzzer={lastBuzzer?.gateType === 'entry' ? lastBuzzer : null}
           streamUrl={entryCameraUrl}
+          baseUrl={baseHttpUrl}
+          onPreview={(url, title) => setSelectedImage({ url, title })}
         />
         <GatePanel
           gateType="exit"
@@ -67,6 +82,8 @@ export default function Dashboard() {
           plate={exitPlate}
           buzzer={lastBuzzer?.gateType === 'exit' ? lastBuzzer : null}
           streamUrl={exitCameraUrl}
+          baseUrl={baseHttpUrl}
+          onPreview={(url, title) => setSelectedImage({ url, title })}
         />
       </section>
 
@@ -96,8 +113,23 @@ export default function Dashboard() {
                       {session.timeOut ? 'logout' : 'login'}
                     </span>
                   </div>
-                  <div>
-                    <div className="text-sm font-bold text-on-surface">{session.plateIn}</div>
+                  <div className="cursor-pointer group/item"
+                    onClick={() => {
+                      const isExit = !!session.timeOut;
+                      const imageUrl = isExit 
+                        ? (session.fullImageOut ? `${baseHttpUrl}${session.fullImageOut}` : (session.plateImageOut?.startsWith('http') ? session.plateImageOut : `${baseHttpUrl}${session.plateImageOut}`))
+                        : (session.fullImageIn ? `${baseHttpUrl}${session.fullImageIn}` : (session.plateImageIn.startsWith('http') ? session.plateImageIn : `${baseHttpUrl}${session.plateImageIn}`));
+                      
+                      setSelectedImage({
+                        url: imageUrl || '',
+                        title: `Ảnh ${isExit ? 'ra' : 'vào'} - Biển số: ${isExit ? session.plateOut : session.plateIn}`
+                      });
+                    }}
+                  >
+                    <div className="text-sm font-bold text-on-surface group-hover/item:text-primary transition-colors flex items-center gap-2">
+                      {session.plateIn}
+                      <span className="material-symbols-outlined text-[14px] opacity-0 group-hover/item:opacity-100 transition-opacity">zoom_in</span>
+                    </div>
                     <div className="text-[10px] text-slate-400">
                       {session.cardUID} · {new Date(session.timeIn).toLocaleTimeString('vi-VN')}
                     </div>
@@ -127,6 +159,14 @@ export default function Dashboard() {
         </div>
       </section>
     </main>
+    {selectedImage && (
+      <ImageModal 
+        url={selectedImage.url} 
+        title={selectedImage.title} 
+        onClose={() => setSelectedImage(null)} 
+      />
+    )}
+    </>
   );
 }
 
@@ -137,9 +177,11 @@ interface GatePanelProps {
   plate: PlateResult | null;
   buzzer: BuzzerFeedback | null;
   streamUrl: string;
+  baseUrl: string;
+  onPreview: (url: string, title: string) => void;
 }
 
-function GatePanel({ gateType, gate, plate, buzzer, streamUrl }: GatePanelProps) {
+function GatePanel({ gateType, gate, plate, buzzer, streamUrl, baseUrl, onPreview }: GatePanelProps) {
   const isEntry = gateType === 'entry';
 
   return (
@@ -236,11 +278,16 @@ function GatePanel({ gateType, gate, plate, buzzer, streamUrl }: GatePanelProps)
             {plate ? (
               <div className="flex gap-3 items-center">
                 {/* Plate Image */}
-                <div className="w-24 flex-shrink-0 aspect-[3/1] bg-slate-200 rounded-md overflow-hidden border border-primary-fixed-dim">
+                <div className="w-24 flex-shrink-0 aspect-[3/1] bg-slate-200 rounded-md overflow-hidden border border-primary-fixed-dim cursor-pointer hover:ring-2 hover:ring-primary transition-all group"
+                  onClick={() => {
+                    const fullUrl = plate.fullImageUrl ? (plate.fullImageUrl.startsWith('http') ? plate.fullImageUrl : `${baseUrl}${plate.fullImageUrl}`) : (plate.imageUrl.startsWith('http') ? plate.imageUrl : `${baseUrl}${plate.imageUrl}`);
+                    onPreview(fullUrl, `Ảnh ${isEntry ? 'vào' : 'ra'} - Biển số: ${plate.plateText}`);
+                  }}
+                >
                   <img
-                    src={plate.imageUrl}
+                    src={plate.imageUrl.startsWith('http') ? plate.imageUrl : `${baseUrl}${plate.imageUrl}`}
                     alt="Ảnh biển số xe"
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-cover group-hover:scale-110 transition-transform"
                   />
                 </div>
                 {/* Plate Data */}

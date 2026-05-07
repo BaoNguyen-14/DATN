@@ -498,13 +498,14 @@ async def send_stats():
     })
 
 
-async def send_plate_result(gate_type: str, result, plate_image_url: str):
+async def send_plate_result(gate_type: str, result, plate_image_url: str, full_image_url: str):
     """Gửi kết quả nhận diện biển số."""
     await broadcast({
         'type': 'plate_recognized',
         'payload': {
             'plateText': result.plate_text,
             'imageUrl': plate_image_url,
+            'fullImageUrl': full_image_url,
             'timestamp': result.timestamp,
             'confidence': result.confidence,
             'gateType': gate_type,
@@ -612,7 +613,8 @@ async def handle_entry_rfid(card_uid: str):
 
         # Gửi kết quả lên Dashboard
         plate_image_url = f'/captures/{os.path.basename(result.plate_image_path)}' if result.plate_image_path else ''
-        await send_plate_result('entry', result, plate_image_url)
+        full_image_url = f'/captures/{os.path.basename(result.full_image_path)}' if result.full_image_path else ''
+        await send_plate_result('entry', result, plate_image_url, full_image_url)
 
         # Tạo session
         session_id = f"S{now.strftime('%Y%m%d%H%M%S')}_{card_uid.replace(':', '')}"
@@ -622,7 +624,9 @@ async def handle_entry_rfid(card_uid: str):
             'plateIn': plate_text,
             'plateOut': None,
             'plateImageIn': plate_image_url,
+            'fullImageIn': full_image_url,
             'plateImageOut': None,
+            'fullImageOut': None,
             'timeIn': now.isoformat(),
             'timeOut': None,
             'durationMinutes': None,
@@ -719,7 +723,8 @@ async def handle_exit_rfid(card_uid: str):
 
     # Gửi kết quả nhận diện lên Dashboard
     plate_image_url = f'/captures/{os.path.basename(result.plate_image_path)}' if result.plate_image_path else ''
-    await send_plate_result('exit', result, plate_image_url)
+    full_image_url = f'/captures/{os.path.basename(result.full_image_path)}' if result.full_image_path else ''
+    await send_plate_result('exit', result, plate_image_url, full_image_url)
 
     # === SO SÁNH BIỂN SỐ ===
     is_matched = plate_from_card and plate_current and plate_from_card.replace(' ', '') == plate_current.replace(' ', '')
@@ -754,6 +759,7 @@ async def handle_exit_rfid(card_uid: str):
         if session:
             session['plateOut'] = plate_current
             session['plateImageOut'] = plate_image_url
+            session['fullImageOut'] = full_image_url
             session['timeOut'] = now.isoformat()
             session['durationMinutes'] = duration_minutes
             session['cost'] = cost
